@@ -1,0 +1,96 @@
+---
+title: 'detect fraud: credit card'
+author: "Madeline Lui"
+date: '2022-07-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup}
+library(ranger)
+library(caret)
+library(data.table)
+library(caTools)
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(neuralnet)
+```
+
+```{r load data}
+creditcard_dat <- read.csv("creditcard.csv")
+dim(creditcard_dat)
+head(creditcard_dat)
+tail(creditcard_dat)
+table(creditcard_dat$Class)
+summary(creditcard_dat$Amount)
+names(creditcard_dat)
+var(creditcard_dat$Amount)
+sd(creditcard_dat$Amount)
+```
+
+```{r data wrang}
+creditcard_dat$Amount = scale(creditcard_dat$Amount)
+new_dat = creditcard_dat[,-c(1)]
+head(new_dat)
+```
+
+```{r mod}
+set.seed(2000)
+dat_sample = sample.split(new_dat$Class, SplitRatio=.8)
+train_dat = subset(new_dat, dat_sample==TRUE)
+test_dat = subset(new_dat, dat_sample==FALSE)
+dim(train_dat)
+dim(test_dat)
+```
+```{r logistic mod}
+logistic_mod = glm(Class~.,test_dat, family=binomial())
+summary(logistic_mod)
+plot(logistic_mod)
+
+#assess performance of mod
+lr.predict <- predict(logistic_mod, train_dat, probability=TRUE)
+auc.gbm = roc(train_dat$Class, lr.predict, plot=TRUE, col="blue")
+```
+```{r dec tree}
+dectree_mod <- rpart(Class~., creditcard_dat, method='class')
+predicted_val <- predict(dectree_mod, creditcard_dat, type='class')
+probability <- predict(dectree_mod,creditcard_dat, type='prob')
+rpart.plot(dectree_mod)
+```
+```{r ANN}
+ANN_mod = neuralnet(Class~., train_dat,linear.output=FALSE)
+plot(ANN_mod)
+
+predANN = compute(ANN_mod, test_dat)
+resultANN=predANN$net.result
+resultANN=ifelse(resultANN>.5,1,0)
+```
+```{r gradient boosting}
+library(gbm, quietly=TRUE)
+#time for training GBM mod
+system.time(
+  mod_gbm <- gbm(Class~.,
+                 distribution="bernoulli",
+                 data=rbind(train_dat, test_dat),
+                 n.trees=500,
+                 interaction.depth = 3,
+                 n.minobsinnode = 100,
+                 shrinkage = .01,
+                 bag.fraction = .5,
+                 train.fraction = nrow(train_dat)/(nrow(train_dat)+nrow(test_dat))))
+
+#determine best iteration from test data
+gbm.iter=gbm.perf(mod_gbm, method="test")
+mod.influence=relative.influence(mod_gbm, n.trees=gbm.iter, sort.=TRUE)
+
+plot(mod_gbm)
+
+#calc AUC on test data
+gbm_test = predict(mod_gbm, newdata=test_dat, n.trees=gbm.iter)
+gbm_auc = roc(test_dat$Class, gbm_test, plot=TRUE, col="red")
+print(gbm_auc)
+```
